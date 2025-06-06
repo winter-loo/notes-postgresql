@@ -1,0 +1,105 @@
+Key Optimization Techniques in PostgreSQL
+Based on my exploration of the PostgreSQL codebase, here are the major optimization techniques that PostgreSQL implements:
+
+1. Cost-Based Optimization
+PostgreSQL uses a sophisticated cost-based optimizer that estimates the execution cost of different plans and chooses the one with the lowest cost. Costs are calculated based on:
+
+* I/O costs (disk reads)
+* CPU costs (processing time)
+* Size estimates (number of rows, tuple width)
+* Memory usage
+
+The cost model considers factors like sequential vs. random I/O, CPU processing time for different operations, and available memory for operations like sorting and hashing.
+
+2. Join Order Optimization
+2.1 Dynamic Programming Algorithm
+For queries with a small to moderate number of joins (fewer than geqo_threshold, which defaults to 12), PostgreSQL uses a dynamic programming algorithm to find the optimal join order:
+
+* First considers joins between pairs of base relations
+* Then builds up to larger join trees
+* Considers left-deep, right-deep, and bushy join trees
+* Evaluates different join methods (nested loop, merge join, hash join) for each join
+
+2.2. Genetic Query Optimizer (GEQO)
+For queries with many joins, PostgreSQL switches to a genetic algorithm:
+
+* Represents join orders as "chromosomes"
+* Uses selection, crossover, and mutation to evolve better solutions
+* Trades optimality for planning speed
+* Significantly reduces planning time for complex queries
+
+3. Statistics-Based Selectivity Estimation
+The optimizer relies heavily on statistics collected by the ANALYZE command:
+
+* Maintains histograms of data distribution in tables
+* Tracks most common values and their frequencies
+* Estimates correlation between physical and logical order
+* Uses these statistics to estimate the selectivity of predicates
+
+4. Index Selection
+PostgreSQL intelligently selects indexes based on:
+
+* Query predicates and their selectivity
+* Available indexes (B-tree, Hash, GiST, GIN, etc.)
+* Cost of index access vs. sequential scan
+* Potential for index-only scans when all needed columns are in the index
+
+5. Multi-Column Statistics
+PostgreSQL collects statistics on combinations of columns to better estimate selectivity for queries with multiple conditions:
+
+* Extended statistics objects track correlation between columns
+* Improves cardinality estimates for multi-column predicates
+* Helps choose better join orders
+
+6. Subquery Optimization
+Several techniques for optimizing subqueries:
+
+* Subquery flattening (converting subqueries to joins where possible)
+* Subquery decorrelation (removing correlations to enable more optimizations)
+* Common subexpression elimination
+* Constant folding and expression simplification
+
+7. Partition Pruning
+For partitioned tables, PostgreSQL can eliminate partitions that don't contain relevant data:
+
+* Constraint exclusion based on partition bounds
+* Early pruning during planning phase
+* Runtime pruning for parameterized queries
+
+8. Parallel Query Execution
+PostgreSQL optimizes for multi-core systems:
+
+* Parallel sequential scans
+* Parallel joins (nested loop, hash join)
+* Parallel aggregation
+* Dynamic adjustment of worker counts based on system load
+
+9. Materialization Strategies
+Optimizes the materialization of intermediate results:
+
+* Incremental sort for optimizing ORDER BY with LIMIT
+* Memoization for repeated subplan execution
+* Just-in-time compilation (JIT) for expression evaluation
+
+10. Equivalence Class Detection
+The optimizer tracks sets of expressions known to be equal:
+
+* Used for redundant join clause elimination
+* Helps determine which orderings are available "for free"
+* Enables more efficient plan selection
+
+11. Parameterized Paths
+PostgreSQL supports parameterized paths, where a scan or join depends on values from outer relations:
+
+* Allows pushing join conditions down into inner scans
+* Can significantly improve performance for nested loop joins
+* Enables more efficient execution of correlated subqueries
+
+12. Custom Plan Caching
+For prepared statements and repeated queries:
+
+* Caches query plans for reuse
+* Uses generic plans for queries with parameters
+* Switches between generic and custom plans based on execution statistics
+
+These optimization techniques work together to produce efficient execution plans across a wide range of query types and database schemas. The PostgreSQL optimizer continues to evolve with each release, adding new optimization techniques and refining existing ones.
