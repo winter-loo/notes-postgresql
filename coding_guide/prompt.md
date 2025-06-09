@@ -1,0 +1,1 @@
+What if I want to make some changes to the code of the psql binary program, what are some core concepts and APIs should I know? Write your answer in a file naming 'psql_guide.md' in the directory 'docs/coding_guide'
