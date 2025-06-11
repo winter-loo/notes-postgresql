@@ -141,6 +141,67 @@ typedef struct TupleTableSlot
 } TupleTableSlot;
 ```
 
+> [!note] TupleTableSlot
+> 
+> ```
+> ┌─────────────────────────────────┐                ┌────────────────────────────────┐
+> │          TupleTableSlot         │                │       TupleTableSlotOps        │
+> ├─────────────────────────────────┤                ├────────────────────────────────┤
+> │ NodeTag type                    │                │ size_t base_slot_size          │
+> │ uint16 tts_flags                │◄───refers to───┤ void (*init)()                 │
+> │ AttrNumber tts_nvalid           │                │ void (*release)()              │
+> │ const TupleTableSlotOps *tts_ops│                │ void (*clear)()                │
+> │ TupleDesc tts_tupleDescriptor   │                │ void (*getsomeattrs)()         │
+> │ Datum *tts_values               │                │ void (*materialize)()          │
+> │ bool *tts_isnull                │                │ void (*copyslot)()             │
+> │ MemoryContext tts_mcxt          │                │ HeapTuple (*get_heap_tuple)()  │
+> │ ItemPointerData tts_tid         │                │ MinimalTuple (*get_minimal)()  │
+> │ Oid tts_tableOid                │                │ void (*copy_heap_tuple)()      │
+> └─────────────────────────────────┘                │ bool (*current_xact_tuple)()   │
+>                  ▲                                 └────────────────────────────────┘
+>                  │                                           ▲
+>      ┌───────────┼─────────────────┐                         │
+>      │           │                 │                         │
+> ┌────┴──────┐ ┌──┴───────┐   ┌─────┴────────┐      ┌─────────┴────────────┐
+> │           │ │          │   │              │      │                      │
+> │VirtualTTS │ │ HeapTTS  │   │MinimalTTS    │      │ Implementation       │
+> │           │ │          │   │              │      │ Instances:           │
+> └───────────┘ └──────────┘   └──────────────┘      │                      │
+>                    ▲                               │ TTSOpsVirtual        │
+>                    │                               │ TTSOpsHeapTuple      │
+>          ┌─────────┴───────┐                       │ TTSOpsMinimalTuple   │
+>          │                 │                       │ TTSOpsBufferHeapTuple│
+> ┌────────┴────────────┐    │                       └──────────────────────┘
+> │                     │    │
+> │ BufferHeapTTS       │    │          ┌────────────────────┐      ┌─────────────┐
+> │                     │    └─uses─────┤     HeapTuple      │◄─────┤  TupleDesc  │
+> └─────────────────────┘               └────────────────────┘      └─────────────┘
+>                                                 │                        ▲
+>                                                 │                        │
+>                                                 ▼                        │
+>                               ┌────────────────────────┐                 │
+>                               │    MinimalTuple        │─────────────────┘
+>                               └────────────────────────┘
+> ```
+
+This diagram illustrates the object-oriented relationships around `TupleTableSlot` in PostgreSQL:
+
+1. **TupleTableSlot** - The base structure containing metadata about a tuple and referencing a specific operations implementation
+
+2. **TupleTableSlotOps** - Interface defining operations that can be performed on tuple slots with various implementations
+
+3. **Concrete Slot Implementations**:
+   - **VirtualTupleTableSlot**: For "virtual" tuples(not own data but reference the underlying tuple data)
+   - **HeapTupleTableSlot**: For regular heap tuples in memory
+   - **BufferHeapTupleTableSlot**: For tuples in disk buffer pages
+   - **MinimalTupleTableSlot**: For minimal tuples (compact representation)
+
+4. **Operation Implementations**:
+   - TTSOpsVirtual, TTSOpsHeapTuple, TTSOpsMinimalTuple, TTSOpsBufferHeapTuple
+
+5. **Related Structures**:
+   - HeapTuple, MinimalTuple, TupleDesc
+
 ### ExprContext
 
 `ExprContext` provides a context for expression evaluation:
@@ -459,12 +520,10 @@ For testing:
 To analyze executor performance:
 
 1. Enable timing: `SET track_io_timing = on;`
-2. Enable executor instrumentation: `SET enable_instrumentation.executor = on;`
-3. Use `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)` to see detailed execution metrics
-4. For deeper analysis, use external tools:
+2. Use `EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)` to see detailed execution metrics
+3. For deeper analysis, use external tools:
    - `perf` on Linux: `perf record -g -p postgres_pid`
    - `dtrace` on macOS and Solaris
-   - PostgreSQL's built-in `auto_explain` extension
 
 ## Common Pitfalls
 
