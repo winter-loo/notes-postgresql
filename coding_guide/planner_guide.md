@@ -21,6 +21,82 @@ The optimization process follows these steps:
 5. Select the cheapest path (or cheapest path with desired ordering)
 6. Convert the selected path tree into an executable plan tree
 
+### Optimization Rule: Predicate Pushdown
+
+Predicate pushdown is a crucial query optimization technique that moves filter conditions (predicates) as close as possible to the data sources. This reduces the amount of data processed in intermediate steps.
+
+#### How Predicate Pushdown Works
+
+1. **Basic Principle**: Filter data as early as possible in the execution plan
+2. **Benefits**: Reduces I/O, memory usage, and CPU processing time
+3. **Examples**: Pushing WHERE clauses into subqueries, views, or even down to storage engines
+
+#### Implementation in PostgreSQL
+
+In PostgreSQL, predicate pushdown is primarily implemented in `src/backend/optimizer/prep/prepqual.c` and `src/backend/optimizer/util/clauses.c`. Here's how it works:
+
+```c
+/* Function that tries to push down qualifications from a parent relation into subqueries */
+static Query *
+subquery_push_qual(Query *subquery, RangeTblEntry *rte, Index rti, Node *qual)
+{
+    /* Make a copy of the subquery to modify */
+    Query *result = copyObject(subquery);
+
+    /*
+     * If the subquery has a LIMIT clause, we cannot push the qual into it
+     * since that would change the number of rows returned.
+     */
+    if (result->limitCount)
+        return result;
+
+    /* Merge the qual into subquery's WHERE clause */
+    if (result->jointree->quals)
+        result->jointree->quals = make_and_qual(result->jointree->quals,
+                                             copyObject(qual));
+    else
+        result->jointree->quals = copyObject(qual);
+
+    /* The pushed-down quals may contain SubLinks, so update hasSubLinks */
+    if (!result->hasSubLinks)
+        result->hasSubLinks = checkExprHasSubLink(qual);
+
+    return result;
+}
+```
+
+#### Common Use Cases
+
+1. **Simple Predicate Pushdown**: Consider a query with a WHERE clause on a table:
+   ```sql
+   SELECT * FROM orders JOIN order_items ON orders.id = order_items.order_id 
+   WHERE orders.date > '2023-01-01';
+   ```
+   
+   PostgreSQL will push the date predicate down to the `orders` table scan, filtering rows before the join operation.
+
+2. **Subquery Predicate Pushdown**: For a query with a subquery:
+   ```sql
+   SELECT * FROM (
+       SELECT * FROM products
+   ) AS p WHERE p.price < 100;
+   ```
+   PostgreSQL will push the price filter inside the subquery evaluation.
+
+#### Implementation Steps for Adding a New Pushdown Rule
+
+1. Identify where predicates can be safely pushed down
+2. Modify `prepqual.c` functions like `pull_up_sublinks()` and `pull_up_subqueries()`
+3. Add logic to recognize and transform the specific predicate type
+4. Ensure semantic equivalence before and after transformation
+5. Add statistics collection for the optimization
+
+#### Debugging Tips
+
+1. Use `debug_print_qual` GUC to see quals as they're processed
+2. Check `src/backend/optimizer/README` for optimizer internals
+3. The function `distribute_restrictinfo_to_rels()` in `src/backend/optimizer/prep/prepjointree.c` is key for how quals get distributed between relations
+
 ## Key Files and Their Purposes
 
 The optimizer code is divided into several subdirectories:
