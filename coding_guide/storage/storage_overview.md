@@ -111,6 +111,196 @@ The buffer manager ensures efficient I/O operations by:
 
 ## WAL (Write-Ahead Logging)
 
+The Write-Ahead Logging (WAL) subsystem is a critical component of PostgreSQL's architecture, ensuring data integrity and durability. This developer guide aims to provide a comprehensive overview of WAL's architecture, components, interfaces, and best practices for PostgreSQL developers.
+
+### 1. Introduction
+
+WAL implements the fundamental principle that changes to data files should only be written to disk after those changes have been logged to durable storage. This ensures that if a crash occurs, the database can recover to a consistent state by replaying the WAL records.
+
+Key benefits of WAL include:
+- Crash recovery (REDO) capability
+- Support for point-in-time recovery
+- Enabling replication and streaming replication
+- Reducing physical I/O by batching disk writes
+
+### 2. WAL Architecture
+
+#### 2.1 WAL Files and Segments
+
+WAL data is stored in files called segments. Each segment has a fixed size (default 16MB, configurable via `wal_segment_size`). Segments are named sequentially and organized in the `pg_wal` directory (formerly `pg_xlog` in older versions).
+
+Format: `XXXXXXXXYYYYYYYY` where:
+- `XXXXXXXX` is the timeline ID (hexadecimal)
+- `YYYYYYYY` is the log segment number (hexadecimal)
+
+#### 2.2 WAL Records
+
+WAL records are variable-length entries containing:
+- Header: Record length, CRC, previous record's location, etc.
+- Resource Manager ID: Identifies which subsystem created the record
+- Data: The actual change data specific to the record type
+
+Records are immutable once written and are identified by their Log Sequence Number (LSN), which is a 64-bit value representing the byte position in the WAL stream.
+
+#### 2.3 WAL Buffers
+
+Changes are first written to in-memory WAL buffers before being flushed to disk. The number and size of these buffers are controlled by the `wal_buffers` parameter.
+
+#### 2.4 Resource Managers
+
+Each PostgreSQL subsystem that needs to record changes in WAL registers a Resource Manager that provides:
+- `rm_info`: Record type information
+- `rm_desc`: Functions to describe record contents
+- `rm_redo`: Functions to replay changes
+- `rm_undo`: Functions for rollback (optional)
+
+### 3. WAL Workflow
+
+#### 3.1 WAL Insertion
+
+```c
+XLogRecPtr XLogInsertRecord(XLogRecData *rdata, XLogRecPtr fpw_lsn, uint8 flags,
+                           int num_fpi, bool topxid_included);
+```
+
+Typical usage pattern:
+1. Prepare record data in an `XLogRecData` structure
+2. Call `XLogInsertRecord()` to insert the record
+3. Receive the LSN of the record as the return value
+
+#### 3.2 WAL Flushing
+
+```c
+void XLogFlush(XLogRecPtr record);
+```
+
+Ensures all WAL data up to the specified LSN is written and fsync'd to disk. Critical for ensuring durability guarantees.
+
+#### 3.3 Checkpoints
+
+Checkpoints ensure all dirty data buffers are flushed to disk, limiting recovery time after a crash. They create a known-good point in the transaction log.
+
+Triggered by:
+- Time-based intervals (`checkpoint_timeout`)
+- WAL volume (`max_wal_size`)
+- Explicit command (`CHECKPOINT`)
+
+### 4. WAL Record Types
+
+WAL records are categorized by their Resource Manager and record type. Common types include:
+
+- XLOG: Control information like checkpoints
+- HEAP: Table data modifications
+- BTREE: B-tree index modifications
+- HASH: Hash index modifications
+- GIN/GIST/SP-GIST: Other index types
+- CLOG: Transaction commit status
+- MULTIXACT: Multiple transaction information
+- XACT: Transaction commit/abort records
+
+### 5. Implementing WAL Support in Modules
+
+To add WAL support to a PostgreSQL module:
+
+1. Define record types and structures
+2. Implement a Resource Manager
+3. Add record creation logic during data modifications
+4. Implement REDO functions for recovery
+
+Example structure for a resource manager:
+
+```c
+static const RmgrData MyRmgrData = {
+    .rm_name = "MyExtension",
+    .rm_redo = my_redo,
+    .rm_desc = my_desc,
+    .rm_startup = NULL,
+    .rm_cleanup = NULL,
+    .rm_mask = NULL
+};
+```
+
+#### 5.1 Custom WAL Resource Managers
+
+Extensions can register custom WAL resource managers using the provided API:
+
+```c
+void RegisterCustomRmgr(uint8 rmid, const RmgrData *rmgr);
+```
+
+### 6. Generic WAL Records
+
+For simpler cases, PostgreSQL provides a Generic WAL API that abstracts the details of WAL record creation:
+
+```c
+GenericXLogStart(Relation relation) → GenericXLogState *
+GenericXLogRegisterBuffer(GenericXLogState *state, Buffer buffer, int flags)
+GenericXLogFinish(GenericXLogState *state) → XLogRecPtr
+```
+
+This simplifies adding WAL support to extensions without implementing a full Resource Manager.
+
+### 7. Asynchronous Commit
+
+PostgreSQL offers different commit modes:
+
+- `synchronous_commit = on`: Wait until WAL is flushed to disk (default)
+- `synchronous_commit = off`: Return without waiting for WAL flush
+- Other modes: (`remote_apply`, `remote_write`, `local`, etc.)
+
+Developers should understand these modes' implications for data durability when implementing features.
+
+### 8. WAL and Replication
+
+WAL enables PostgreSQL's replication features:
+
+- Streaming replication uses WAL to continuously send changes to standby servers
+- Physical replication slots prevent needed WAL segments from being removed
+- Logical replication decodes WAL into logical change sets
+
+### 9. Key WAL-Related Data Structures
+
+- `XLogRecPtr`: 64-bit LSN value identifying WAL positions
+- `XLogRecord`: WAL record header structure
+- `XLogRecData`: Structure used to build WAL records
+- `XLogReaderState`: Used for reading and decoding WAL records
+
+### 10. Best Practices
+
+#### 10.1 Performance Considerations
+
+- Group related changes into a single WAL record when possible
+- Be mindful of WAL volume generated by operations
+- Properly size WAL buffers for workload requirements
+- Consider full-page writes impact for frequently updated pages
+
+#### 10.2 Recovery Considerations
+
+- Ensure REDO functions handle all possible edge cases
+- Test recovery thoroughly with various failure scenarios
+- Remember that WAL replay happens without transaction context
+
+#### 10.3 Common Pitfalls
+
+- Missing WAL records for required operations
+- Incorrect ordering of WAL operations
+- Insufficient data in WAL records for proper replay
+- Forgetting to handle WAL during buffer modifications
+
+### 11. Debugging and Monitoring
+
+- `pg_waldump`: Tool to inspect WAL segment contents
+- `pg_current_wal_lsn()`: SQL function to get current WAL position
+- `pg_current_wal_insert_lsn()`: Get current insert position
+- `pg_wal_replay_pause()` and `pg_wal_replay_resume()`: Control replay on standby
+- `pg_stat_wal`: View for WAL statistics
+
+### 12. Further Reading
+
+- PostgreSQL source: `src/backend/access/transam/xlog.c` and related files
+- PostgreSQL documentation: "Write-Ahead Log" chapter
+- PostgreSQL wiki: "WAL" and "Custom WAL Resource Managers"
+
 WAL ensures durability and crash recovery:
 
 1. **Log Records**: Each change is first recorded in the WAL before modifying the actual data pages.

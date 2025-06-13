@@ -4,3 +4,6 @@
 [submodule "source/postgresql"]
 	path = source/postgresql
 	url = https://git.postgresql.org/git/postgresql.git
+[submodule "source/pg-extensions"]
+	path = source/pg-extensions
+	url = git@github.com:winter-loo/pg-extensions.git
